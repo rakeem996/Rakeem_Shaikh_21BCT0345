@@ -1,139 +1,155 @@
 const express = require('express');
-const {WebSocketServer} = require('ws');
+const { WebSocketServer } = require('ws');
 
-const sockserver = new WebSocketServer({port:443});
+const sockserver = new WebSocketServer({ port: 8080 });
 
-const app = express()
+// const chatserver = new WebSocketServer({port: 443});
 
-// app.use(express.static('client/build'));
+const app = express();
 
 const gameState = {
-    board: Array(5).fill(null).map(() => Array(5).fill(null)),
-    players: {},
-    turn: 'A', // Player A starts
+  board: Array(5).fill(null).map(() => Array(5).fill(null)),
+  players: {},
+  turn: 'A', // Player A starts
 };
 
 // Basic setup for characters
 const initialSetup = (player) => {
-    const row = player === 'A' ? 0 : 4;
-    gameState.board[row] = ['P1', 'H1', 'H2', 'P2', 'P3'].map(name => `${player}-${name}`);
-    gameState.players[player] = { characters: ['P1', 'H1', 'H2', 'P2', 'P3'] };
+  const row = player === 'A' ? 0 : 4;
+  gameState.board[row] = ['P1', 'H1', 'H2', 'P2', 'P3'].map(name => `${player}-${name}`);
+  gameState.players[player] = { characters: ['P1', 'H1', 'H2', 'P2', 'P3'] };
 };
 
 const initializeGame = () => {
-    initialSetup('A');
-    initialSetup('B');
+  initialSetup('A');
+  initialSetup('B');
 };
 
 initializeGame();
 
-// for(let i=0; i<5; i++) {
-//     for(let j=0; j<5; j++) {
-//         process.stdout.write(` ${gameState.board[i][j]}`);
-//     }
-//     console.log("\n")
-// }
-
 // Function to broadcast game state to all clients
 const broadcastState = () => {
-    sockserver.clients.forEach(client => {
-        if (client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify(gameState));
-        }
-    });
+  sockserver.clients.forEach(client => {
+    if (client.readyState === client.OPEN) {
+      client.send(JSON.stringify(gameState));
+    }
+  });
 };
 
 function findCharacterPosition(player, character) {
-    for (let i = 0; i < 5; i++) {
-        for (let j = 0; j < 5; j++) {
-            if (gameState.board[i][j] === `${player}-${character}`) {
-                return [i, j];
-            }
-        }
+  console.log(`Finding position for: ${player}-${character}`);
+  for (let i = 0; i < 5; i++) {
+    for (let j = 0; j < 5; j++) {
+      console.log(`Checking cell [${i}][${j}]: ${gameState.board[i][j]}`);
+      if (gameState.board[i][j] === `${player}-${character}`) {
+        console.log(`Found at [${i}][${j}]`);
+        return [i, j];
+      }
     }
-    return [-1, -1];
+  }
+  console.log(`Character ${player}-${character} not found`);
+  return [-1, -1];
 }
 
-function calculateNewPosition(x, y, move) {
-    switch (move) {
-        case 'L': return [x, y - 1];
-        case 'R': return [x, y + 1];
-        case 'F': return [x - 1, y];
-        case 'B': return [x + 1, y];
-        case 'FL': return [x - 1, y - 1];
-        case 'FR': return [x - 1, y + 1];
-        case 'BL': return [x + 1, y - 1];
-        case 'BR': return [x + 1, y + 1];
-        default: return [x, y];
-    }
+function calculateNewPosition(x, y, move, i) {
+  switch (move) {
+    case 'L': return [x, y - i];
+    case 'R': return [x, y + i];
+    case 'F': return [x - i, y];
+    case 'B': return [x + i, y];
+    case 'FL': return [x - i, y - i];
+    case 'FR': return [x - i, y + i];
+    case 'BL': return [x + i, y - i];
+    case 'BR': return [x + i, y + i];
+    default: return [x, y];
+  }
 }
 
 function isValidMove(player, character, x, y, newX, newY) {
-    if (newX < 0 || newX >= 5 || newY < 0 || newY >= 5) {
-        return false; // Out of bounds
+  // Check bounds
+  if (newX < 0 || newX >= 5 || newY < 0 || newY >= 5) {
+      return false; // Out of bounds
     }
-
-    if (gameState.board[newX][newY] && gameState.board[newX][newY].startsWith(player)) {
+    
+    // Check if the target cell is occupied by a friendly character
+    if (gameState.board[newX][newY] && gameState.board[newX][newY][0] === player) {
         return false; // Can't move to a space occupied by a friendly character
     }
+    console.log("hol")
 
-    // Additional movement rules depending on character type can be added here
+  // Add more specific checks based on character type
+  const characterType = character.split('-')[1];
 
-    return true;
+        if(characterType==='P1' || characterType==='P2' || characterType==='P3')
+                return true;
+        else if(characterType==='H1' || characterType==='H2')
+                return true;
+        else return false;
 }
 
-// app.use('/', (req,res) => {
-//     res.sendFile('/temp.html', {root:__dirname});
-// });
-
 sockserver.on('connection', ws => {
-    console.log("new client connected");
-    ws.send("connection established");
-    ws.on('close', ()=>{console.log("connection disconnected")});
-    ws.on('message', (message)=> {
-        // sockserver.clients.forEach(clients => {
-        //     console.log(`distributing message: ${message}`);
-        //     clients.send(`${message}`);
-        // })
+  console.log("New client connected");
+  ws.send(JSON.stringify(gameState)); // Send the initial game state when a new client connects
+
+  ws.on('message', (message) => {
+    try {
+      const data = JSON.parse(message);
+      console.log('Received:', data);
+      if (data.type === 'move') {
+        const { player, character, move, selectedCell } = data;
+
+        if (gameState.turn !== player || character == null) {
+          ws.send(JSON.stringify({ error: 'Not your turn!' }));
+          return;
+        }
+
+        const x = selectedCell.row;
+        const y = selectedCell.col;
+
+        if (x === -1 && y === -1) {
+          ws.send(JSON.stringify({ error: 'Character not found!' }));
+          return;
+        }
+
+        const characterType = character.split('-')[1];
+        console.log(characterType)
+        let i;
+        if(characterType==='P1' || characterType==='P2' || characterType==='P3')
+                i = 1;
+        else if(characterType==='H1' || characterType==='H2')
+                i = 2;
         
-
-        // const data = JSON.parse(message);
-        console.log('Received:', data);
-
-        if(data.type === 'move') {
-            const {player, character, move} = data;
-        }
-
-        if (gameState.turn !== player) {
-            ws.send(JSON.stringify({ error: 'Not your turn!' }));
-            return;
-        }
-
-        // Implement move validation and update game state
-        const [x, y] = findCharacterPosition(player, character);
-        const [newX, newY] = calculateNewPosition(x, y, move);
-
-        if (isValidMove(player, character, x, y, newX, newY)) {
-            gameState.board[x][y] = null;
-            gameState.board[newX][newY] = `${player}-${character}`;
-
-            // Change turn
-            gameState.turn = player === 'A' ? 'B' : 'A';
+            const [newX, newY] = calculateNewPosition(x, y, move, i);
+            console.log(newY);
+          
+          if (isValidMove(player, character, x, y, newX, newY)) {
+            console.log("hello")
+          gameState.board[x][y] = null;
+          gameState.board[newX][newY] = `${character}`;
+          gameState.turn = player === 'A' ? 'B' : 'A';
+          console.log(gameState.board)
+          broadcastState();  // Notify all clients of the updated state
         } else {
-            ws.send(JSON.stringify({ error: 'Invalid move!' }));
+          ws.send(JSON.stringify({ error: 'Invalid move!' }));
         }
-
-        broadcastState();
-
-        ws.send(JSON.stringify(gameState));
-
-    })
-    ws.onerror = function () {
-        console.log('websocket error')
+      }
+    } catch (e) {
+      console.error('Error processing message:', e);
+      ws.send(JSON.stringify({ error: 'Invalid message format!' }));
     }
-})
+  });
+
+  ws.on('close', () => { 
+    console.log("Client disconnected"); 
+  });
+
+  ws.onerror = function () {
+    console.log('WebSocket error');
+  };
+});
 
 
-app.listen(3000, ()=> {
-    console.log("listening on port 3000");
-})
+
+app.listen(4000, () => {
+  console.log("Listening on port 4000");
+});
